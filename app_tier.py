@@ -21,6 +21,10 @@ sqs= boto3.client('sqs', region_name='us-east-1')
 req_queue_url = 'https://sqs.us-east-1.amazonaws.com/905418311239/1229850065-req-queue'
 resp_queue_url = 'https://sqs.us-east-1.amazonaws.com/905418311239/1229850065-resp-queue'
 
+s3 = boto3.client('s3', region_name='us-east-1')
+input_bucket = '1229850065-in-bucket'
+output_bucket = '1229850065-out-bucket'
+
 def face_match(image, data_path='data.pt'):
     face, prob = mtcnn(image, return_prob=True)
     if face is not None and prob > 0.9:
@@ -31,6 +35,30 @@ def face_match(image, data_path='data.pt'):
         idx_min = dist_list.index(min(dist_list))
         return name_list[idx_min]
     return "Unknown", None
+
+
+def upload_image_to_s3(image_data, filename):
+    """
+    上传图片到S3输入桶。
+    """
+    try:
+        s3.upload_fileobj(BytesIO(image_data), input_bucket, filename)
+        logging.info(f"Image {filename} uploaded to {input_bucket}")
+    except Exception as e:
+        logging.error(f"Failed to upload image to S3: {e}")
+
+
+def upload_result_to_s3(result, filename):
+    """
+    上传识别结果到S3输出桶。
+    """
+    try:
+        result_bytes = result.encode('utf-8')
+        s3.put_object(Bucket=output_bucket, Key=filename, Body=result_bytes)
+        logging.info(f"Result for {filename} uploaded to {output_bucket}")
+    except Exception as e:
+        logging.error(f"Failed to upload result to S3: {e}")
+
 
 def check_queue_messages(queue_url):
     # 檢查隊列中的消息數量
@@ -57,8 +85,15 @@ def process_messages():
                 try:
                     body = json.loads(message['Body'])
                     img_data = base64.b64decode(body['image_data'])
+                    
+                    filename = body['filename']
+                    upload_image_to_s3(img_data, filename)
+
                     img = Image.open(BytesIO(img_data))
                     name = face_match(img)
+
+                    upload_result_to_s3(name, filename.split('.')[0])  # 除去文件扩展名
+
                     response_data = {
                         'request_id': body['request_id'],
                         'filename': body['filename'],
